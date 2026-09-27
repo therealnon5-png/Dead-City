@@ -27,6 +27,80 @@ goreHitEvent.Event:Connect(function(info)
     GoreService.RegisterHit(info)
 end)
 
+-- Tool scripts can be sandboxed. Listen to an event inside each Tool rather
+-- than requiring GoreService or firing a BindableEvent outside that container.
+local watchedTools = setmetatable({}, { __mode = "k" })
+local watchedEvents = setmetatable({}, { __mode = "k" })
+local function connectVisualEvent(tool, event)
+    if event.Name ~= "GoreVisualHit" or not event:IsA("BindableEvent")
+        or watchedEvents[event] then return end
+    watchedEvents[event] = true
+    event.Event:Connect(function(hitPart, hitPosition)
+        if tool.Parent == nil or not tool:IsDescendantOf(workspace) then return end
+        local character = tool.Parent
+        local player = Players:GetPlayerFromCharacter(character)
+        local attacker = character and character:FindFirstChildOfClass("Humanoid")
+        local root = character and character:FindFirstChild("HumanoidRootPart")
+        local handle = tool:FindFirstChild("Handle")
+        if not player or not attacker or attacker.Health <= 0 or not root
+            or not handle or not handle:IsA("BasePart") then return end
+        if typeof(hitPart) ~= "Instance" or not hitPart:IsA("BasePart")
+            or not hitPart:IsDescendantOf(workspace) then return end
+        local zombie, victim, host = GoreService.GetZombie(hitPart)
+        -- Bindable callbacks may run after the weapon's lethal TakeDamage.
+        if not zombie or not victim or not host then return end
+        local position = host.Position
+        if typeof(hitPosition) == "Vector3" and hitPosition.X == hitPosition.X
+            and hitPosition.Y == hitPosition.Y and hitPosition.Z == hitPosition.Z
+            and (hitPosition - host.Position).Magnitude <= host.Size.Magnitude + 3 then
+            position = hitPosition
+        end
+        if tool.Name == "Machete" then
+            if (host.Position - root.Position).Magnitude > 12 then return end
+        elseif tool.Name == "Pistol" then
+            if (host.Position - root.Position).Magnitude > 5000 then return end
+            local direction = position - handle.Position
+            if direction.Magnitude < 0.01 then return end
+            local params = RaycastParams.new()
+            params.FilterType = Enum.RaycastFilterType.Exclude
+            params.FilterDescendantsInstances = { character }
+            local ray = workspace:Raycast(handle.Position, direction.Unit * (direction.Magnitude + 3), params)
+            if not ray then return end
+            local rayZombie, _, rayHost = GoreService.GetZombie(ray.Instance)
+            if rayZombie ~= zombie or rayHost ~= host then return end
+        else
+            return
+        end
+        local applied, reason = GoreService.ApplyGore(zombie, host, position)
+        if not applied then warn("[ZombieGoreHandler] " .. tostring(reason)) end
+    end)
+end
+
+local function watchTool(tool)
+    if not tool:IsA("Tool") or watchedTools[tool] then return end
+    watchedTools[tool] = true
+    tool.DescendantAdded:Connect(function(child) connectVisualEvent(tool, child) end)
+    for _, child in ipairs(tool:GetDescendants()) do
+        connectVisualEvent(tool, child)
+    end
+end
+
+local function watchContainer(container)
+    for _, child in ipairs(container:GetChildren()) do watchTool(child) end
+    container.ChildAdded:Connect(watchTool)
+end
+
+local function watchPlayer(player)
+    player.CharacterAdded:Connect(watchContainer)
+    if player.Character then watchContainer(player.Character) end
+    task.spawn(function()
+        local backpack = player:WaitForChild("Backpack")
+        watchContainer(backpack)
+    end)
+end
+Players.PlayerAdded:Connect(watchPlayer)
+for _, player in ipairs(Players:GetPlayers()) do watchPlayer(player) end
+
 local setup = setmetatable({}, { __mode = "k" })
 local function setupZombie(character)
     if not character:IsA("Model") or setup[character] then return end

@@ -1,118 +1,145 @@
--- Copy into Pistol > GunScript_Server. Keep its existing RemoteEvents and IgniteScript child.
-local Players = game:GetService("Players")
-local ServerScriptService = game:GetService("ServerScriptService")
-local Gore = require(ServerScriptService:WaitForChild("Server"):WaitForChild("GoreService"))
 local Tool = script.Parent
 local Handle = Tool:WaitForChild("Handle")
-local Setting = require(Tool:WaitForChild("Setting"))
+local Player
+local Character
+local Humanoid
+--local TEAM
+local VisualizeBullet = script.Parent:WaitForChild("VisualizeBullet")
+local Module = require(Tool:WaitForChild("Setting"))
 local ChangeAmmoAndClip = script:WaitForChild("ChangeAmmoAndClip")
 local InflictTarget = script:WaitForChild("InflictTarget")
-local Ammo = script:FindFirstChild("Ammo") or Instance.new("NumberValue")
-Ammo.Name, Ammo.Parent = "Ammo", script
-local Clips = script:FindFirstChild("Clips") or Instance.new("NumberValue")
-Clips.Name, Clips.Parent = "Clips", script
-Ammo.Value = Setting.AmmoPerClip
-Clips.Value = Setting.LimitedClipEnabled and Setting.Clips or 0
-
-for name, id in pairs({
-    IdleAnim = Setting.DualEnabled and 53610688 or Setting.IdleAnimationID,
-    FireAnim = Setting.FireAnimationID,
-    ReloadAnim = Setting.ReloadAnimationID,
-    ShotgunClipinAnim = Setting.ShotgunClipinAnimationID,
-}) do
-    if id ~= nil and not Tool:FindFirstChild(name) then
-        local anim = Instance.new("Animation")
-        anim.Name = name
-        anim.AnimationId = "rbxassetid://" .. tostring(id)
-        anim.Parent = Tool
-    end
+local Grip2
+local Handle2
+if Module.DualEnabled then
+    Handle2 = Tool:WaitForChild("Handle2", 1)
+    if Handle2 == nil and Module.DualEnabled then error('"Dual" setting is enabled but "Handle2" is missing!') end
+end
+local AmmoValue = script:FindFirstChild("Ammo") or Instance.new("NumberValue", script)
+AmmoValue.Name = "Ammo"
+AmmoValue.Value = Module.AmmoPerClip
+local ClipsValue = script:FindFirstChild("Clips") or Instance.new("NumberValue", script)
+ClipsValue.Name = "Clips"
+ClipsValue.Value = Module.LimitedClipEnabled and Module.Clips or 0
+if Module.IdleAnimationID ~= nil or Module.DualEnabled then
+    local IdleAnim = Instance.new("Animation", Tool)
+    IdleAnim.Name = "IdleAnim"
+    IdleAnim.AnimationId = "rbxassetid://" .. (Module.DualEnabled and 53610688 or Module.IdleAnimationID)
+end
+if Module.FireAnimationID ~= nil then
+    local FireAnim = Instance.new("Animation", Tool)
+    FireAnim.Name = "FireAnim"
+    FireAnim.AnimationId = "rbxassetid://" .. Module.FireAnimationID
+end
+if Module.ReloadAnimationID ~= nil then
+    local ReloadAnim = Instance.new("Animation", Tool)
+    ReloadAnim.Name = "ReloadAnim"
+    ReloadAnim.AnimationId = "rbxassetid://" .. Module.ReloadAnimationID
+end
+if Module.ShotgunClipinAnimationID ~= nil then
+    local ShotgunClipinAnim = Instance.new("Animation", Tool)
+    ShotgunClipinAnim.Name = "ShotgunClipinAnim"
+    ShotgunClipinAnim.AnimationId = "rbxassetid://" .. Module.ShotgunClipinAnimationID
 end
 
-local nextShotAt = 0
-local reloadUntil = 0
-local function owner(player)
-    local character = player.Character
-    local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-    return character and Tool.Parent == character and humanoid and humanoid.Health > 0, character, humanoid
+-- This BindableEvent lives inside this Script's sandbox. GoreService runs in Server.
+local GoreVisualHit = script:FindFirstChild("GoreVisualHit")
+if not GoreVisualHit then
+    GoreVisualHit = Instance.new("BindableEvent")
+    GoreVisualHit.Name = "GoreVisualHit"
+    GoreVisualHit.Parent = script
 end
-
-ChangeAmmoAndClip.OnServerEvent:Connect(function(player, requestedAmmo)
-    local valid = owner(player)
-    if not valid or typeof(requestedAmmo) ~= "number" or requestedAmmo ~= requestedAmmo then return end
-    local now = os.clock()
-    -- The old client sends its count after every shot. Account for misses here;
-    -- hits were already charged in InflictTarget and have the same count.
-    if requestedAmmo == Ammo.Value - 1 and now >= nextShotAt and now >= reloadUntil then
-        Ammo.Value -= 1
-        nextShotAt = now + math.max(0.05, Setting.FireRate or 0.05)
-        return
-    end
-    if requestedAmmo ~= Setting.AmmoPerClip or Ammo.Value >= Setting.AmmoPerClip
-        or now < reloadUntil then return end
-    if Setting.LimitedClipEnabled and Clips.Value <= 0 then return end
-    reloadUntil = os.clock() + math.max(0, Setting.ReloadTime or 0)
-    task.delay(math.max(0, Setting.ReloadTime or 0), function()
-        local stillEquipped = owner(player)
-        if not stillEquipped or os.clock() < reloadUntil - 0.01 then return end
-        if Setting.LimitedClipEnabled then Clips.Value -= 1 end
-        Ammo.Value = Setting.AmmoPerClip
+local goreWarning
+local function ApplyGoreVisual(hitPart, hitPosition)
+    local ok, reason = pcall(function()
+        GoreVisualHit:Fire(hitPart, hitPosition)
     end)
+    if not ok and reason ~= goreWarning then
+        goreWarning = reason
+        warn("[Pistol Gore] " .. tostring(reason))
+    end
+end
+ChangeAmmoAndClip.OnServerEvent:connect(function(Player, Ammo, Clips)
+    -- Preserve the original post-shot/post-reload protocol and timing.
+    if Tool.Parent ~= Player.Character then return end
+    if typeof(Ammo) ~= "number" or Ammo ~= Ammo or Ammo < 0 or Ammo > Module.AmmoPerClip then return end
+    if typeof(Clips) ~= "number" or Clips ~= Clips or Clips < 0 or Clips > Module.MaxClip then return end
+    AmmoValue.Value = Ammo
+    ClipsValue.Value = Clips
 end)
-
-InflictTarget.OnServerEvent:Connect(function(player, targetHumanoid, targetTorso, _clientDamage,
-        _clientDirection, _clientKnockback, _clientLifesteal, _clientFlaming, hitPart, hitPosition)
-    local valid, character, shooter = owner(player)
-    if not valid or os.clock() < reloadUntil or Ammo.Value <= 0 then return end
-    if typeof(hitPart) ~= "Instance" or not hitPart:IsA("BasePart") or not hitPart:IsDescendantOf(workspace)
-        or typeof(hitPosition) ~= "Vector3" or hitPosition.X ~= hitPosition.X
-        or hitPosition.Y ~= hitPosition.Y or hitPosition.Z ~= hitPosition.Z
-        or typeof(targetHumanoid) ~= "Instance"
-        or not targetHumanoid:IsA("Humanoid") or targetHumanoid.Health <= 0 then return end
-    local now = os.clock()
-    if now < nextShotAt then return end
-    local origin = Handle.Position
-    local direction = hitPosition - origin
-    if direction.Magnitude < 0.01 or direction.Magnitude > 500 then return end
-    local params = RaycastParams.new()
-    params.FilterType = Enum.RaycastFilterType.Exclude
-    params.FilterDescendantsInstances = { character }
-    local result = workspace:Raycast(origin, direction.Unit * (direction.Magnitude + 2), params)
-    if not result or (result.Position - hitPosition).Magnitude > 6 then return end
-    local victim, humanoid, bodyPart = Gore.ResolveHit(result.Instance)
-    if not victim or humanoid ~= targetHumanoid or victim == character then return end
-    if result.Instance ~= hitPart then
-        local claimedVictim = Gore.ResolveHit(hitPart)
-        if claimedVictim ~= victim then return end
+InflictTarget.OnServerEvent:connect(function(Player, TargetHumanoid, TargetTorso, Damage, Direction, Knockback, Lifesteal, FlamingBullet, HitPart, HitPosition)
+    -- Keep the original eight payload arguments; append only Gore hit metadata.
+    if Tool.Parent ~= Player.Character then return end
+    local attackerHumanoid = Tool.Parent:FindFirstChildOfClass("Humanoid")
+    if not attackerHumanoid or attackerHumanoid.Health <= 0 then return end
+    if typeof(TargetHumanoid) ~= "Instance" or not TargetHumanoid:IsA("Humanoid")
+        or not TargetHumanoid:IsDescendantOf(workspace) or TargetHumanoid.Health <= 0 then return end
+    local target = TargetHumanoid.Parent
+    if target == Player.Character or typeof(TargetTorso) ~= "Instance" or not TargetTorso:IsA("BasePart")
+        or not TargetTorso:IsDescendantOf(target) then return end
+    if typeof(Direction) ~= "Vector3" or Direction.Magnitude ~= Direction.Magnitude
+        or Direction.Magnitude < 0.001 or Direction.Magnitude == math.huge then return end
+    Direction = Direction.Unit
+    if (TargetTorso.Position - Handle.Position).Magnitude > 5000 + (Module.Radius or 0) then return end
+    local validHit = typeof(HitPart) == "Instance" and HitPart:IsA("BasePart") and HitPart.Parent == target
+    local headDamage = Module.BaseDamage * (Module.HeadshotEnabled and Module.HeadshotDamageMultiplier or 1)
+    if validHit then
+        Damage = HitPart.Name == "Head" and headDamage or Module.BaseDamage
+    else
+        -- Compatibility with original clients: only Setting's damage values are accepted.
+        Damage = Damage == headDamage and headDamage or Module.BaseDamage
     end
-    local victimPlayer = Players:GetPlayerFromCharacter(victim)
-    if victimPlayer and not player.Neutral and not victimPlayer.Neutral
-        and victimPlayer.TeamColor == player.TeamColor then return end
-    nextShotAt = now + math.max(0.05, Setting.FireRate or 0.05)
-    Ammo.Value -= 1
-    local damage = Setting.BaseDamage
-    if bodyPart and bodyPart.Name == "Head" and Setting.HeadshotEnabled then
-        local desired = Setting.BaseDamage * Setting.HeadshotDamageMultiplier
-        damage = Gore.IsZombie(victim) and desired / Gore.Config.HeadshotMultiplier or desired
-    end
-    local applied, actualDamage = Gore.RegisterHit({
-        Attacker = player, Character = victim, Humanoid = humanoid,
-        BodyPart = bodyPart, Damage = damage,
-        Position = result.Position, Normal = result.Normal,
-    })
-    if not applied then return end
-    local knockback = math.max(0, Setting.Knockback or 0)
-    local root = victim:FindFirstChild("HumanoidRootPart")
-    if knockback > 0 and root then root.AssemblyLinearVelocity += direction.Unit * knockback end
-    local lifesteal = math.clamp(Setting.Lifesteal or 0, 0, 1)
-    if lifesteal > 0 then shooter.Health = math.min(shooter.MaxHealth, shooter.Health + actualDamage * lifesteal) end
-    if Setting.FlamingBullet then
-        local template = script:FindFirstChild("IgniteScript")
-        if template and not victim:FindFirstChild("IgniteScript") then
-            local ignite = template:Clone()
-            local creator = ignite:FindFirstChild("creator")
-            if creator and creator:IsA("ObjectValue") then creator.Value = player end
-            ignite.Parent = victim
-            ignite.Disabled = false
+    Knockback, Lifesteal, FlamingBullet = Module.Knockback, Module.Lifesteal, Module.FlamingBullet
+    if Player and TargetHumanoid and TargetHumanoid.Health ~= 0 and TargetTorso then
+        while TargetHumanoid:FindFirstChild("creator") do TargetHumanoid.creator:Destroy() end
+        local creator = Instance.new("ObjectValue", TargetHumanoid)
+        creator.Name = "creator"
+        creator.Value = Player
+        game.Debris:AddItem(creator, 5)
+        if validHit and not target:FindFirstChildOfClass("ForceField") then
+            local position = HitPart.Position
+            if typeof(HitPosition) == "Vector3" and (HitPosition - HitPart.Position).Magnitude <= HitPart.Size.Magnitude + 2 then
+                position = HitPosition
+            end
+            ApplyGoreVisual(HitPart, position)
         end
+        TargetHumanoid:TakeDamage(Damage)
+        if Knockback > 0 then TargetTorso.Velocity = Direction * Knockback end
+        if Lifesteal > 0 and Humanoid and Humanoid.Health ~= 0 then
+            Humanoid.Health = Humanoid.Health + (Damage * Lifesteal)
+        end
+        if FlamingBullet then
+            local Debuff = TargetHumanoid.Parent:FindFirstChild("IgniteScript") or script.IgniteScript:Clone()
+            Debuff.creator.Value = Player
+            Debuff.Disabled = false
+            Debuff.Parent = TargetHumanoid.Parent
+        end
+    end
+end)
+Tool.Equipped:connect(function()
+    Player = game.Players:GetPlayerFromCharacter(Tool.Parent)
+    Character = Tool.Parent
+    Humanoid = Character:FindFirstChild("Humanoid")
+    --TEAM = Character:FindFirstChild("TEAM")
+    if Module.DualEnabled and Workspace.FilteringEnabled then
+        Handle2.CanCollide = false
+        local LeftArm = Tool.Parent:FindFirstChild("Left Arm")
+        local RightArm = Tool.Parent:FindFirstChild("Right Arm")
+        if RightArm then
+            local Grip = RightArm:WaitForChild("RightGrip", 0.01)
+            if Grip then
+                Grip2 = Grip:Clone()
+                Grip2.Name = "LeftGrip"
+                Grip2.Part0 = LeftArm
+                Grip2.Part1 = Handle2
+                --Grip2.C1 = Grip2.C1:inverse()
+                Grip2.Parent = LeftArm
+            end
+        end
+    end
+end)
+Tool.Unequipped:connect(function()
+    if Module.DualEnabled and Workspace.FilteringEnabled then
+        Handle2.CanCollide = true
+        if Grip2 then Grip2:Destroy() end
     end
 end)

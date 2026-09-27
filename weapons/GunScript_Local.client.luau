@@ -69,8 +69,9 @@ end
 function RayCast(Start,Direction,Range,Ignore)
 	local Hit,EndPos = game.Workspace:FindPartOnRay(Ray.new(Start,Direction*Range),Ignore)
 	if Hit then
-        if ((Hit.Transparency > 0.75 and not Hit:GetAttribute("GoreHitbox"))
-            or not Hit.CanQuery
+		if ((Hit.Transparency > 0.75 and not Hit:GetAttribute("GoreHitbox"))
+			or not Hit.CanQuery
+			or Hit:GetAttribute("GoreHost") ~= nil -- Aim at the original R6 hitbox under the cosmetic Gore.
 			or Hit.Name == "Handle"
 			or Hit.Name == "Effect"
 			or Hit.Name == "Bullet"
@@ -85,18 +86,6 @@ function RayCast(Start,Direction,Range,Ignore)
 		end
 	end
 	return Hit,EndPos
-end
-
-local function resolveTarget(hit)
-	local model = hit and hit:FindFirstAncestorOfClass("Model")
-	while model do
-		local humanoid = model:FindFirstChildOfClass("Humanoid")
-		if humanoid then
-			return humanoid, model:FindFirstChild("HumanoidRootPart") or model:FindFirstChild("Torso")
-		end
-		model = model:FindFirstAncestorOfClass("Model")
-	end
-	return nil, nil
 end
 
 function ShakeCamera()
@@ -124,7 +113,8 @@ function Fire(ShootingHandle)
 		local Hit,EndPos = RayCast(Start,Direction,5000,Character)
 		if not Module.ExplosiveEnabled then
 			if Hit and Hit.Parent then
-				local TargetHumanoid, TargetTorso = resolveTarget(Hit)
+				local TargetHumanoid = Hit.Parent:FindFirstChild("Humanoid")
+				local TargetTorso = Hit.Parent:FindFirstChild("HumanoidRootPart")
 				--local TargetTEAM = Hit.Parent:FindFirstChild("TEAM")
 				if TargetHumanoid and TargetHumanoid.Health > 0 and TargetTorso then
 					--if TargetTEAM and TargetTEAM.Value ~= TEAM.Value then
@@ -134,8 +124,7 @@ function Fire(ShootingHandle)
 												Direction,
 												Module.Knockback,
 												Module.Lifesteal,
-												Module.FlamingBullet,
-												Hit, EndPos)
+												Module.FlamingBullet, Hit, EndPos)
 						PiercedHumanoid[TargetHumanoid] = true
 					--end
 				else
@@ -150,7 +139,8 @@ function Fire(ShootingHandle)
 			Explosion.Parent = Workspace.CurrentCamera
 			Explosion.Hit:connect(function(Hit)
 				if Hit and Hit.Parent and Hit.Name == "Torso" then
-					local TargetHumanoid, TargetTorso = resolveTarget(Hit)
+					local TargetHumanoid = Hit.Parent:FindFirstChild("Humanoid")
+					local TargetTorso = Hit.Parent:FindFirstChild("Torso")
 					--local TargetTEAM = Hit.Parent:FindFirstChild("TEAM")
 					if TargetHumanoid and TargetHumanoid.Health > 0 and TargetTorso then
 						--if TargetTEAM and TargetTEAM.Value ~= TEAM.Value then
@@ -160,8 +150,7 @@ function Fire(ShootingHandle)
 													Direction,
 													Module.Knockback,
 													Module.Lifesteal,
-													Module.FlamingBullet,
-													Hit, EndPos)
+													Module.FlamingBullet, Hit, EndPos)
 						--end
 					end
 				end
@@ -216,10 +205,10 @@ function Reload()
 		end
 		if ReloadAnim then ReloadAnim:Play(nil,nil,Module.ReloadAnimationSpeed) end
 		Handle.ReloadSound:Play() script.Parent.Model.reload:FireServer()
-		ChangeAmmoAndClip:FireServer(Module.AmmoPerClip, Clips)
 		wait(Module.ReloadTime)
 		if Module.LimitedClipEnabled then Clips = Clips - 1 end
 		Ammo = Module.AmmoPerClip
+		ChangeAmmoAndClip:FireServer(Ammo,Clips)
 		Reloading = false
 		UpdateGUI()
 	end
