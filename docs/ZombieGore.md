@@ -1,134 +1,52 @@
-# R6 zombie gore setup
+# Zombie Gore (R6) และอาวุธ
 
-Rojo syncs `src/server/ZombieGore.luau` to `ServerScriptService.Server.ZombieGore` as a ModuleScript. Your existing Studio models stay in ServerStorage.
+โปรเจกต์จริงอยู่ที่ `D:\Dead_City_Project\Dead-City` และ `default.project.json` ในโฟลเดอร์นี้ sync `src/server` ไปที่ `ServerScriptService.Server`.
 
-## Prepare models
+## สคริปต์ที่ sync ผ่าน Rojo
 
-Apply the `Zombie` tag (or lowercase `zombie`) to the NPC **Model**, not its Humanoid or individual parts. The NPC must be an R6 rig with a Humanoid.
+- `src/server/GoreService.luau` -> `ServerScriptService.Server.GoreService` (ModuleScript)
+- `src/server/ZombieGoreHandler.server.luau` -> `ServerScriptService.Server.ZombieGoreHandler` (Script)
+- `src/server/ZombieGore.luau` -> compatibility module สำหรับสคริปต์เก่าที่ require ชื่อนี้
 
-Use these exact folders and template names:
+Handler ตั้งค่า NPC ที่ติด tag `Zombie` หรือ `zombie`, ตั้ง `BreakJointsOnDeath = false`, สร้าง `ReplicatedStorage.GoreRemotes.WeaponHit` และ `ServerStorage.GoreHitEvent`. `WeaponHit` ใช้ได้เฉพาะ Tool ที่ตั้ง `GoreRemoteEnabled = true`, `Damage`, `FireRate` Attributes และผ่านการตรวจ raycast จาก Server. Machete/Pistol ในงานนี้เรียก `GoreService.RegisterHit` จาก Server Script ของตัวเองโดยตรง ไม่ต้องเปิด Attribute นี้.
+
+## โมเดลที่ต้องมีใน Studio
+
+Rojo project นี้ไม่มี asset โมเดล Gore ใน filesystem. ต้องมีใน `ServerStorage` ของ place:
 
 ```text
-ServerStorage
-  Gore_Body_Folder
-    Gor_Heads
-      Head (Model)
-      Head (another Model / variant)
-    Gore_Arms
-      Left Arm (Model)
-      Right Arm (Model)
-    Gore_Chest
-      Torso (Model)
+Gore_Body_Folder
+  Gor_Heads (หรือ Gore_Heads)
+    Head (Model หรือ BasePart)
+  Gore_Arms
+    Left Arm (Model หรือ BasePart)
+    Right Arm (Model หรือ BasePart)
+  Gore_Chest
+    Torso (Model หรือ BasePart)
+  Gore_Legs (ถ้าต้องการขา)
+    Left Leg
+    Right Leg
 ```
 
-You can give variants unique names such as `Head_01` if each has a string attribute `BodyPart` set to `Head`, `Left Arm`, `Right Arm`, or `Torso`. Subfolders are supported. Chest uses the R6 name `Torso`. Left and right arms are selected separately. Models must contain BaseParts and have Archivable enabled.
+Variant ชื่ออื่นใช้ได้ ถ้ากำหนด String Attribute `BodyPart` บน Model/BasePart เป็นชื่อชิ้น R6 ตรงตัว. รองรับ subfolder. ทุก template ต้อง `Archivable = true` และมีอย่างน้อยหนึ่ง `BasePart`. ตั้ง Pivot ที่จุดกึ่งกลางชิ้นเดิม; ใส่ `CFrameValue` ชื่อ `GoreOffset` ถ้าต้องชดเชยตำแหน่ง. ระบบเลือก template ตามชิ้นที่โดนจริง จึงไม่สุ่มแขนซ้ายไปใส่แขนขวา. หากไม่มี asset จะเตือนใน Output และคงชิ้นเดิมไว้; ไม่มีโมเดลให้แสดงโดยอัตโนมัติ.
 
-Set each model's pivot to the center/orientation of the R6 body part it replaces. Model geometry should be sized for your rig. The script aligns that pivot with the original part, then welds every replacement part to it. It does not automatically resize assets. BasePart templates also work.
+ติด CollectionService tag `Zombie` หรือ `zombie` ที่ NPC **Model** R6 ที่มี Humanoid. ชิ้นส่วนเดิมต้องยังอยู่และ raycast/touch ได้. ระบบซ่อนชิ้นเดิมหลัง clone กับ weld สำเร็จ, คง Motor6D, และเลือดออกได้เมื่อโจมตีซ้ำโดยไม่ซ้อนโมเดล.
 
-## Connect your attack system
+## Script ที่ต้องแทนใน Studio เอง
 
-Humanoid health changes do not identify which body part was hit. Your weapon must pass the result of its hit detection to this module. From a **server** script, after validating the attack:
+โฟลเดอร์ `weapons` อยู่นอก Rojo mapping และไม่ได้ sync เข้า Tool:
 
-```lua
-local Gore = require(game:GetService("ServerScriptService").Server.ZombieGore)
+1. Machete: คัดลอก `weapons/MeleeWeapon.server.luau` ทั้งไฟล์แทน source ของ `Machete > MacheteScript` เดิม. เก็บ `Handle/Hit`, `Handle/Swing`, `ChopR6`/`ChopR15`. อย่าให้ script เก่ารันซ้อน.
+2. Pistol: คัดลอก `weapons/GunScript_Server.server.luau` ทั้งไฟล์แทน source ของ `Pistol > GunScript_Server`. เก็บ child `ChangeAmmoAndClip`, `InflictTarget`, `IgniteScript` และ `Setting` เดิม.
+3. Pistol: คัดลอก `weapons/GunScript_Local.client.luau` ทั้งไฟล์แทน source ของ `Pistol > GunScript_Local`. เก็บ child GUI/effect/animation objects เดิม. Client ส่ง `hitPart`/`hitPosition` เพิ่ม; Server ใช้ raycast และค่าดาเมจจาก `Setting`, ไม่เชื่อ damage จาก Client.
 
--- hitPart is the BasePart hit by your server raycast or melee hitbox.
-local zombie, humanoid = Gore.GetZombie(hitPart)
-if zombie and humanoid.Health > 0 then
-    local ok, reason = Gore.ApplyHit(hitPart)
-    if not ok then
-        warn(reason)
-    end
-    humanoid:TakeDamage(25)
-end
-```
+`WAP`, `VisualizeBulletScript`, `BulletVisualizerScript`, `nothing` และ `Setting` ไม่ต้องแก้สำหรับ Gore. Pistol ตามค่า Setting ที่ให้ (`ExplosiveEnabled = false`) ผ่านทาง hit ปกติ; ระบบนี้ยังไม่ได้รองรับการทำดาเมจแบบพื้นที่ของกระสุนระเบิด.
 
-Apply visuals before damage so a lethal hit is also processed. The module never changes health or destroys the original body parts. Legs can still receive damage through your attack system but have no gore replacement. Repeated hits keep one replacement per part; head hits can produce another short blood burst. Droplets expire after 0.8 seconds, with a global limit of 150.
+## ตรวจใน Studio
 
-## Adapt the gun in message.txt
+- หัว/แขนซ้าย/แขนขวา/อกของ R6 tagged zombie ขึ้นโมเดลตรงชิ้นและติดตาม animation; โจมตีซ้ำไม่ซ้อนโมเดล.
+- ยิงหรือตีโดนโมเดล Gore ที่ติดแล้ว: damage และเลือดยังทำงาน.
+- Lethal hit, zombie ตาย, corpse cleanup, unequip, reset character, ผู้เล่นสองคน, ammo/reload, teammate, ForceField.
+- ลองเอา template ออกหนึ่งชิ้น: Output เตือนและไม่ซ่อนชิ้นเดิม.
 
-For the melee weapon, use the complete replacement script and instructions in [Melee weapon setup](MeleeWeapon.md). The gun instructions below are separate.
-
-The note's gun is not present as a Tool in this filesystem. Make these changes in its existing scripts in Studio. Do not place its Tool scripts directly in `src/server` or `src/client`: they depend on `script.Parent` being the Tool.
-
-In the client, replace the damage request with:
-
-```lua
-Receiver:FireServer("Damage", hitHumanoid, Damage, hitObject)
-```
-
-The current team check blocks NPCs when the shooter is on a team. Replace that condition with:
-
-```lua
-if not hitPlayer or MyPlayer.Neutral or hitPlayer.TeamColor ~= MyPlayer.TeamColor then
-```
-
-The client's old raycast ignores transparent parts, which would skip replaced limbs. In `RayIgnoreCheck`, replace `hit.Transparency >= 1` with:
-
-```lua
-(hit.Transparency >= 1 and not hit:GetAttribute("GoreHitbox"))
-```
-
-Also add this check at the beginning of `RayIgnoreCheck` to skip the cosmetic replacements and droplets:
-
-```lua
-if hit and hit:IsA("BasePart") and not hit.CanQuery then
-    return true
-end
-```
-
-At the top of the Tool's **server** script, add:
-
-```lua
-local Gore = require(game:GetService("ServerScriptService").Server.ZombieGore)
-local lastHit = 0
-local SERVER_DAMAGE = 25
-local RANGE = 350
-local FIRE_INTERVAL = 0.5
-```
-
-Replace the server's existing `elseif action == "Damage" then` branch with the following body (keep the callback's closing `end` statements). This version targets zombies only and ignores the client-provided damage amount:
-
-```lua
-elseif action == "Damage" then
-    local character = player.Character
-    local shooter = character and character:FindFirstChildOfClass("Humanoid")
-    if Tool.Parent ~= character or not shooter or shooter.Health <= 0 then
-        return
-    end
-    local now = os.clock()
-    if now - lastHit < FIRE_INTERVAL then return end
-    lastHit = now
-
-    local requestedPart = Data[3]
-    local zombie, humanoid = Gore.GetZombie(requestedPart)
-    if not zombie or humanoid ~= Data[1] or humanoid.Health <= 0 then return end
-    local direction = requestedPart.Position - Handle.Position
-    if direction.Magnitude < 0.001 or direction.Magnitude > RANGE then return end
-
-    local params = RaycastParams.new()
-    params.FilterType = Enum.RaycastFilterType.Exclude
-    params.FilterDescendantsInstances = { character }
-    local result = workspace:Raycast(Handle.Position, direction.Unit * (direction.Magnitude + 2), params)
-    if not result then return end
-    local actualZombie = Gore.GetZombie(result.Instance)
-    if actualZombie ~= zombie then return end
-
-    local ok, reason = Gore.ApplyHit(result.Instance)
-    if not ok and result.Instance.Name ~= "Left Leg" and result.Instance.Name ~= "Right Leg" then
-        warn(reason)
-    end
-    humanoid:TakeDamage(SERVER_DAMAGE)
-```
-
-This checks equipment, life, range, cadence, and line of sight, and uses the part actually struck by the server raycast. The legacy gun still tracks ammo and reload on the client; a complete weapon system should validate those on the server as well. This compatibility hook validates a ray toward the requested part's center; a future server-authoritative firing system should raycast the actual shot direction instead.
-
-## Studio checks
-
-1. Tag an R6 NPC and fire at its head, both arms, and torso. Check that the correct variant appears and follows walking animations.
-2. Shoot the same part again: there should be no stacked replacements. Repeated head shots should still burst briefly.
-3. Check that face decals disappear and droplets clear. Hats/accessories are left intact.
-4. Hit a leg or an untagged NPC: no gore replacement should appear.
-5. Temporarily rename an asset folder: the module should report the missing folder without hiding the original part.
-
-API references: [CollectionService tags](https://create.roblox.com/docs/reference/engine/classes/CollectionService), [Model pivots](https://create.roblox.com/docs/reference/engine/classes/Model), and [weld constraints](https://create.roblox.com/docs/physics/constraints/weld).
+`rojo build` ตรวจได้เพียงโครงสร้างและ source; ไม่ยืนยัน asset, hitbox, animation หรือผล runtime ใน Studio.
