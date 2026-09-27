@@ -3,12 +3,16 @@ local CollectionService = game:GetService("CollectionService")
 local Debris = game:GetService("Debris")
 local Players = game:GetService("Players")
 local ServerStorage = game:GetService("ServerStorage")
+local ZombieRagdoll = require(script.Parent:WaitForChild("ZombieRagdoll"))
 
 local GoreService = {}
 GoreService.Config = {
     ZombieTag = "Zombie",
     RootFolderName = "Gore_Body_Folder",
     CorpseLifetime = 8,
+    RagdollOnDeath = true, -- false: remove NPC immediately on death; true: keep corpse for CorpseLifetime.
+    MatchBodyColors = true, -- false: retain the template's Color.
+    UseArmGoreForLegs = true, -- Use the same-side arm if no leg template is available.
     HeadshotMultiplier = 2,
     LimbMultiplier = 0.75,
     BloodLifetime = 0.8,
@@ -26,6 +30,13 @@ local categories = {
 local random = Random.new()
 local bloodCount = 0
 local bloodAt = setmetatable({}, { __mode = "k" })
+local deathHandled = setmetatable({}, { __mode = "k" })
+local legArms = { ["Left Leg"] = "Left Arm", ["Right Leg"] = "Right Arm" }
+local bodyColorProperties = {
+    Head = "HeadColor3", Torso = "TorsoColor3",
+    ["Left Arm"] = "LeftArmColor3", ["Right Arm"] = "RightArmColor3",
+    ["Left Leg"] = "LeftLegColor3", ["Right Leg"] = "RightLegColor3",
+}
 
 local function finiteVector(value)
     return typeof(value) == "Vector3" and value.X == value.X and value.Y == value.Y
@@ -91,6 +102,28 @@ local function collectTemplates(container, partName, result)
     end
 end
 
+local function findTemplates(partName)
+    local templates = {}
+    local folder = getFolder(partName)
+    if folder then collectTemplates(folder, partName, templates) end
+    local arm = legArms[partName]
+    if #templates == 0 and arm and GoreService.Config.UseArmGoreForLegs then
+        local armFolder = getFolder(arm)
+        if armFolder then
+            -- Also allow dedicated leg variants stored in Gore_Arms with BodyPart set.
+            collectTemplates(armFolder, partName, templates)
+            if #templates == 0 then collectTemplates(armFolder, arm, templates) end
+        end
+    end
+    return templates
+end
+
+local function getBodyColor(character, host)
+    local colors = character:FindFirstChildOfClass("BodyColors")
+    local property = bodyColorProperties[host.Name]
+    return colors and property and colors[property] or host.Color
+end
+
 local function spawnBlood(part, position, normal)
     local now = os.clock()
     if now - (bloodAt[part] or -math.huge) < 0.15 then return end
@@ -138,13 +171,7 @@ function GoreService.ApplyGore(character, host, position, normal)
         spawnBlood(host, position, normal)
         return true, "Already replaced"
     end
-    local folder = getFolder(host.Name)
-    if not folder then
-        spawnBlood(host, position, normal)
-        return false, "Missing gore folder for " .. host.Name
-    end
-    local templates = {}
-    collectTemplates(folder, host.Name, templates)
+    local templates = findTemplates(host.Name)
     if #templates == 0 then
         spawnBlood(host, position, normal)
         return false, "No matching gore template for " .. host.Name
@@ -166,7 +193,10 @@ function GoreService.ApplyGore(character, host, position, normal)
     local offsetValue = clone:FindFirstChild("GoreOffset")
     local offset = offsetValue and offsetValue:IsA("CFrameValue") and offsetValue.Value or CFrame.identity
     clone:PivotTo(host.CFrame * offset)
+    local tint = GoreService.Config.MatchBodyColors and getBodyColor(character, host) or nil
     for _, part in ipairs(parts) do
+        -- Mark blood/bone pieces PreserveGoreColor=true to keep their asset color.
+        if tint and part:GetAttribute("PreserveGoreColor") ~= true then part.Color = tint end
         part.Anchored = false
         part.Massless = true
         part.CanCollide = false
@@ -237,6 +267,18 @@ function GoreService.RegisterHit(info)
 end
 
 function GoreService.OnZombieDied(character)
+    if deathHandled[character] or not character.Parent then return end
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if not humanoid or humanoid.Health > 0 then return end
+    deathHandled[character] = true
+    character:SetAttribute("GoreDead", true)
+    if not GoreService.Config.RagdollOnDeath then
+        character:Destroy()
+        return
+    end
+    if not ZombieRagdoll.Apply(character) then
+        warn("[GoreService] Ragdoll requires an intact R6 rig: " .. character.Name)
+    end
     if GoreService.Config.CorpseLifetime > 0 then
         Debris:AddItem(character, GoreService.Config.CorpseLifetime)
     end
