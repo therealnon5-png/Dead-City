@@ -4,6 +4,8 @@ A starter Roblox project for editing Luau in Cursor and syncing scripts into Rob
 
 For R6 zombie part replacements and weapon integration, see [Zombie gore setup](docs/ZombieGore.md).
 
+For the R6 first-person camera and animated arms, see [First-person camera](docs/FirstPersonCamera.md).
+
 ## Folder layout
 
 - `src/server`: server scripts, synced to `ServerScriptService.Server`.
