@@ -6,6 +6,8 @@ For R6 zombie part replacements and weapon integration, see [Zombie gore setup](
 
 For the R6 first-person camera and animated arms, see [First-person camera](docs/FirstPersonCamera.md).
 
+For the existing Studio backpack GUI, I-key controls and live character portrait, see [InventoryGui setup](docs/InventoryGui.md).
+
 ## Folder layout
 
 - `src/server`: server scripts, synced to `ServerScriptService.Server`.
